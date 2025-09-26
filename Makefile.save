@@ -180,7 +180,6 @@ UPROGS=\
 	$U/_echo\
 	$U/_forktest\
 	$U/_grep\
-	$U/_regex\
 	$U/_init\
 	$U/_kill\
 	$U/_ln\
@@ -200,8 +199,7 @@ UPROGS=\
 	$U/_sixfive\
 	$U/_memdump\
 	$U/_find\
-	$U/_uptime\
-	$U/_history
+	$U/_uptime
 
 ifeq ($(LAB),syscall)
 UPROGS += \

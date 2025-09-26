@@ -5,118 +5,160 @@
 #include "kernel/param.h"
 #include "user/user.h"
 
-static int exec_flag;
-static char *exec_cmd_base[MAXARG];
-static int exec_cmd_count;
+static int has_exec;
+static char *exec_args[MAXARG];
+static int exec_count;
+static int use_regex = 0;
 
-static void
-run_command(const char *file_path)
+static int matchhere(char*, char*);
+static int matchstar(int, char*, char*);
+
+static int match(char *re, char *text)
 {
-  char *cmd_argv[MAXARG];
-  int ac = 0;
-
-  for (int i = 0; i < exec_cmd_count && ac < MAXARG - 1; i++)
-    cmd_argv[ac++] = exec_cmd_base[i];
-
-  if (ac < MAXARG - 1)
-    cmd_argv[ac++] = (char *)file_path;
-  cmd_argv[ac] = 0;
-
-  int pid = fork();
-  if (pid < 0) {
-    fprintf(2, "find: fork failed\n");
-    return;
-  }
-  if (pid == 0) {
-    exec(cmd_argv[0], cmd_argv);
-    fprintf(2, "find: exec %s failed\n", cmd_argv[0]);
-    exit(1);
-  }
-  wait(0);
+    if(re[0] == '^') return matchhere(re+1, text);
+    do {
+        if(matchhere(re, text)) return 1;
+    } while(*text++ != '\0');
+    return 0;
 }
 
-static void
-search(const char *current_path, const char *match_name)
+static int matchhere(char *re, char *text)
 {
-  int fd = open(current_path, O_RDONLY);
-  if (fd < 0) {
-    fprintf(2, "find: cannot open %s\n", current_path);
-    return;
-  }
+    if(re[0] == '\0') return 1;
+    if(re[1] == '*') return matchstar(re[0], re+2, text);
+    if(re[0] == '$' && re[1] == '\0') return *text == '\0';
+    if(*text != '\0' && (re[0] == '.' || re[0] == *text))
+        return matchhere(re+1, text+1);
+    return 0;
+}
 
-  struct stat st;
-  if (fstat(fd, &st) < 0) {
-    fprintf(2, "find: cannot stat %s\n", current_path);
+static int matchstar(int c, char *re, char *text)
+{
+    do {
+        if(matchhere(re, text)) return 1;
+    } while(*text != '\0' && (*text++ == c || c == '.'));
+    return 0;
+}
+
+static void run_exec_on(const char *filepath)
+{
+    char *argv[MAXARG];
+    int ac = 0;
+    for(int i = 0; i < exec_count && ac < MAXARG-1; i++)
+        argv[ac++] = exec_args[i];
+    if(ac < MAXARG-1) argv[ac++] = (char*)filepath;
+    argv[ac] = 0;
+
+    int pid = fork();
+    if(pid < 0) {
+        fprintf(2, "find: fork failed\n");
+        return;
+    }
+    if(pid == 0) {
+        exec(argv[0], argv);
+        fprintf(2, "find: exec %s failed\n", argv[0]);
+        exit(1);
+    }
+    wait(0);
+}
+
+static void find(const char *path, const char *target)
+{
+    int fd = open(path, O_RDONLY);
+    if(fd < 0) {
+        fprintf(2, "find: cannot open %s\n", path);
+        return;
+    }
+
+    struct stat st;
+    if(fstat(fd, &st) < 0) {
+        fprintf(2, "find: cannot stat %s\n", path);
+        close(fd);
+        return;
+    }
+
+    if(st.type == T_FILE) {
+        const char *base = path;
+        for(const char *p = path; *p; p++)
+            if(*p == '/') base = p+1;
+
+        int is_match = use_regex ? match((char*)target, (char*)base) : strcmp((char*)base, (char*)target) == 0;
+        if(is_match) {
+            if(has_exec) run_exec_on(path);
+            else printf("%s\n", path);
+        }
+    } else if(st.type == T_DIR) {
+        char buf[512];
+        int n = strlen((char*)path);
+        if(n + 1 + DIRSIZ + 1 > sizeof(buf)) {
+            fprintf(2, "find: path too long: %s\n", path);
+            close(fd);
+            return;
+        }
+
+        struct dirent de;
+        while(read(fd, &de, sizeof(de)) == sizeof(de)) {
+            if(de.inum == 0) continue;
+
+            char name[DIRSIZ+1];
+            memmove(name, de.name, DIRSIZ);
+            name[DIRSIZ] = 0;
+
+            if(strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+
+            strcpy(buf, (char*)path);
+            buf[n] = '/';
+            buf[n+1] = '\0';
+            strcpy(buf+n+1, name);
+
+            find(buf, target);
+        }
+    }
+
     close(fd);
-    return;
-  }
-
-  if (st.type == T_FILE) {
-    const char *base_name = current_path;
-    for (const char *p = current_path; *p; p++) if (*p == '/') base_name = p + 1;
-
-    if (strcmp((char *)base_name, (char *)match_name) == 0) {
-      if (exec_flag) {
-        run_command(current_path);
-      } else {
-        printf("%s\n", current_path);
-      }
-    }
-  } else if (st.type == T_DIR) {
-    char path_buf[512];
-    int len = strlen((char *)current_path);
-    if (len + 1 + DIRSIZ + 1 > sizeof(path_buf)) {
-      fprintf(2, "find: path too long: %s\n", current_path);
-      close(fd);
-      return;
-    }
-
-    struct dirent de;
-    while (read(fd, &de, sizeof(de)) == sizeof(de)) {
-      if (de.inum == 0) continue;
-
-      char name[DIRSIZ + 1];
-      memmove(name, de.name, DIRSIZ);
-      name[DIRSIZ] = 0;
-
-      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
-        continue;
-
-      strcpy(path_buf, (char *)current_path);
-      path_buf[len] = '/';
-      path_buf[len + 1] = '\0';
-      strcpy(path_buf + len + 1, name);
-
-      search(path_buf, match_name);
-    }
-  }
-
-  close(fd);
 }
 
-int
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
-  if (argc < 3) {
-    fprintf(2, "usage: find <start-path> <name> [-exec <cmd> [args...]]\n");
-    exit(1);
-  }
-
-  exec_flag = 0;
-  exec_cmd_count = 0;
-
-  if (argc >= 4 && strcmp(argv[3], "-exec") == 0) {
-    exec_flag = 1;
-    if (argc < 5) {
-      fprintf(2, "find: -exec requires a command\n");
-      exit(1);
+    if(argc < 2) {
+        fprintf(2, "usage: find <start-path> <name|pattern> [-E | -F] [-exec <cmd> [args...]]\n");
+        exit(1);
     }
-    for (int i = 4; i < argc && exec_cmd_count < MAXARG - 1; i++) {
-      exec_cmd_base[exec_cmd_count++] = argv[i];
-    }
-    exec_cmd_base[exec_cmd_count] = 0;
-  }
 
-  search(argv[1], argv[2]);
-  exit(0);
+    has_exec = 0;
+    exec_count = 0;
+    use_regex = 0;
+
+    const char *start = argv[1];
+    const char *target = 0;
+
+    for(int i=2; i<argc; i++){
+        if(strcmp(argv[i], "-E") == 0){
+            use_regex = 1;
+            if(i+1 < argc && argv[i+1][0] != '-'){ target = argv[i+1]; i++; }
+            continue;
+        }
+        if(strcmp(argv[i], "-F") == 0){
+            use_regex = 0;
+            if(i+1 < argc && argv[i+1][0] != '-'){ target = argv[i+1]; i++; }
+            continue;
+        }
+        if(strcmp(argv[i], "-exec") == 0){
+            has_exec = 1;
+            if(i+1 >= argc){ fprintf(2, "find: -exec requires a command\n"); exit(1);}
+            for(int j=i+1; j<argc && exec_count < MAXARG-1; j++) exec_args[exec_count++] = argv[j];
+            exec_args[exec_count] = 0;
+            break;
+        }
+        if(!target) target = argv[i];
+        else { fprintf(2, "usage: find <start-path> <name|pattern> [-E | -F] [-exec <cmd> [args...]]\n"); exit(1);}
+    }
+
+    if(!target){
+        fprintf(2, "usage: find <start-path> <name|pattern> [-E | -F] [-exec <cmd> [args...]]\n");
+        exit(1);
+    }
+
+    find(start, target);
+    exit(0);
 }
