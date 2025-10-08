@@ -1,0 +1,42 @@
+Question 1
+The page table output from pgtbltest shows how the virtual addresses (VAs) of a user process are mapped to physical addresses (PAs), along with their permission bits.
+The first few entries (VAs 0x0–0x4000) represent the process’s code and data segments. Each entry shows a valid mapping to a physical page (e.g., va 0x0 to pa 0x87F22000) with permissions 0x5B, which means the page is valid, readable, writable, executable, and accessible from user mode. These pages contain the user program’s text, data, and possibly part of its heap.
+Addresses 0x5000–0x9000 are unmapped (PTE = 0), meaning there are no valid mappings for those virtual pages.
+At the top of the user address space, the last two entries correspond to special kernel-managed pages used by every process.
+va 0x3FFFFFE000 maps to pa 0x87F42000 with permissions 0xC7 (valid, readable, writable, executable, user accessible). This is the trapframe page, which stores the user’s saved registers during system calls and traps.
+va 0x3FFFFFF000 maps to pa 0x80006000 with permissions 0x4B (valid, readable, executable, user accessible). This is the trampoline page, containing shared code that transfers control between user and kernel mode.
+Overall, the output shows that the process’s code, data, and stack occupy the low addresses, while the trapframe and trampoline occupy the top addresses of the user virtual space.
+
+Question 2
+The USYSCALL shared page could also speed up calls like getuid(), getgid(), and getppid(), since these return mostly static IDs. Also times() could benefit, as it provides frequently read but safely exposable kernel data. In general, this optimization suits read-only system calls that don’t require complex computation or frequent updates.
+
+Question 3
+0x0000000000000000 → pte 0x...5B  
+  User text/code page (read + exec), permissions: V, R, X, U, A.  
+  Matches print_pgtbl entry for program code.
+
+0x0000000000001000 → pte 0x...5B  
+  Next user code/data page, same permissions as above.
+
+0x0000000000002000 → pte 0x...D7  
+  User data/stack page (read + write), permissions: V, R, W, U, A, D.  
+  Writable page seen in print_pgtbl.
+
+0x0000000000003000 → pte 0x...07  
+  Kernel-only mapping (read + write, no user access).  
+  Not accessible to user code.
+
+0x0000000000004000 → pte 0x...D7  
+  Another user data/stack page, same as above (V, R, W, U, A, D).
+
+0x0000003fffffd000 → pte 0x...13  
+  USYSCALL page for fast getpid; user read-only (V, R, U).  
+  Appears in print_pgtbl as read-only page near top.
+
+0x0000003fffffe000 → pte 0x...C7  
+  TRAPFRAME page (kernel read/write, no user).  
+  Used for saving user registers on traps.
+
+0x0000003ffffff000 → pte 0x...4B  
+  TRAMPOLINE page (read + exec, no write, supervisor only).  
+  Shared kernel code for entering/exiting user mode.
