@@ -1,0 +1,7 @@
+Q1,
+registers a0-a7 contain arguments to functions. a0 contains the format string address and a1 contains 12. 13 is in a2
+no jal to f in main, and no jal to g in f (both optimized/inlined). Function g is at address 0x0-0xc and Function f is at address 0xe-0x1a
+it is called from address 0x30 and printf itself is at 0x6f6.
+ra = 0x34
+Final output: He110 World. set i = 0x726c6400 for big endian keep 57616 same
+printf("x=%d y=%d", 3); it will have unspecified garbage since the second register does not contain any value
